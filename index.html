@@ -186,12 +186,77 @@
     0%   { transform: translateY(110vh) rotate(0deg); }
     100% { transform: translateY(-10vh) rotate(360deg); }
   }
+
+  /* ── Music button ── */
+  #music-btn {
+    position: fixed;
+    bottom: 28px; right: 28px;
+    z-index: 100;
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(200,140,155,0.5);
+    background: rgba(255,240,244,0.85);
+    backdrop-filter: blur(10px);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.3rem;
+    box-shadow: 0 4px 20px rgba(200,100,120,0.2);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    opacity: 0;
+    animation: fadeUp 1s 1.8s forwards;
+  }
+  #music-btn:hover {
+    transform: scale(1.12);
+    box-shadow: 0 6px 28px rgba(200,100,120,0.35);
+  }
+  #music-btn.playing .note {
+    animation: noteSpin 2s linear infinite;
+  }
+  @keyframes noteSpin {
+    0%   { transform: rotate(0deg) scale(1); }
+    50%  { transform: rotate(15deg) scale(1.15); }
+    100% { transform: rotate(0deg) scale(1); }
+  }
+  .music-waves {
+    position: fixed;
+    bottom: 32px; right: 84px;
+    display: flex; align-items: flex-end; gap: 3px;
+    height: 20px;
+    opacity: 0;
+    transition: opacity 0.4s;
+    pointer-events: none;
+  }
+  .music-waves.show { opacity: 1; }
+  .music-waves span {
+    display: block;
+    width: 3px;
+    background: #e07090;
+    border-radius: 2px;
+    animation: wave 0.8s ease-in-out infinite;
+  }
+  .music-waves span:nth-child(1) { height: 8px;  animation-delay: 0s; }
+  .music-waves span:nth-child(2) { height: 16px; animation-delay: 0.15s; }
+  .music-waves span:nth-child(3) { height: 12px; animation-delay: 0.3s; }
+  .music-waves span:nth-child(4) { height: 18px; animation-delay: 0.1s; }
+  .music-waves span:nth-child(5) { height: 10px; animation-delay: 0.25s; }
+  @keyframes wave {
+    0%,100% { transform: scaleY(0.4); }
+    50%      { transform: scaleY(1); }
+  }
 </style>
 </head>
 <body>
 
 <canvas id="fireworks-canvas"></canvas>
 <div class="transition-overlay" id="overlay"></div>
+
+<!-- Music button -->
+<div class="music-waves" id="waves">
+  <span></span><span></span><span></span><span></span><span></span>
+</div>
+<button id="music-btn" onclick="toggleMusic()" title="Bật/tắt nhạc">
+  <span class="note">🎵</span>
+</button>
 
 <!-- Floating petals -->
 <div class="petal" style="left:8%;  animation-duration:14s; animation-delay:-3s;  font-size:14px;">🌸</div>
@@ -253,6 +318,138 @@
 </div>
 
 <script>
+  /* ─────── Music Engine (Web Audio API) ─────── */
+  let audioCtx = null, musicPlaying = false;
+  let masterGain, reverbNode, allOscillators = [], allIntervals = [];
+
+  // Romantic melody — pentatonic-inspired, soft & warm
+  // Notes in Hz for key of F major (romantic/soft feel)
+  const melody = [
+    349.23, 392.00, 440.00, 392.00, 349.23, 329.63,
+    293.66, 329.63, 349.23, 392.00, 440.00, 523.25,
+    493.88, 440.00, 392.00, 349.23, 392.00, 329.63,
+    293.66, 261.63, 293.66, 329.63, 349.23, 392.00
+  ];
+  const melodyDur = [0.5,0.5,0.5,0.5,0.5,0.5, 0.5,0.5,0.5,0.5,0.5,0.5,
+                     0.5,0.5,0.5,0.5,0.5,0.5, 0.5,0.5,0.5,0.5,0.5,1.0];
+
+  // Chord pads (soft background)
+  const chords = [
+    [174.61, 220.00, 261.63], // Fm
+    [196.00, 246.94, 293.66], // Gm
+    [174.61, 220.00, 261.63], // Fm
+    [164.81, 207.65, 246.94], // Em
+  ];
+
+  function createReverb(ctx) {
+    const convolver = ctx.createConvolver();
+    const rate = ctx.sampleRate;
+    const len  = rate * 2.5;
+    const buf  = ctx.createBuffer(2, len, rate);
+    for (let c = 0; c < 2; c++) {
+      const d = buf.getChannelData(c);
+      for (let i = 0; i < len; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/len, 3.5);
+    }
+    convolver.buffer = buf;
+    return convolver;
+  }
+
+  function playNote(freq, startTime, duration, gainVal = 0.12, type = 'sine') {
+    const osc  = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, startTime);
+    // Vibrato
+    const vibLfo = audioCtx.createOscillator();
+    const vibGain = audioCtx.createGain();
+    vibLfo.frequency.value = 5.5;
+    vibGain.gain.value = 2.5;
+    vibLfo.connect(vibGain);
+    vibGain.connect(osc.frequency);
+    vibLfo.start(startTime);
+    vibLfo.stop(startTime + duration + 0.3);
+
+    gain.gain.setValueAtTime(0, startTime);
+    gain.gain.linearRampToValueAtTime(gainVal, startTime + 0.06);
+    gain.gain.setValueAtTime(gainVal, startTime + duration - 0.08);
+    gain.gain.linearRampToValueAtTime(0, startTime + duration + 0.25);
+
+    osc.connect(gain);
+    gain.connect(reverbNode);
+    gain.connect(masterGain);
+    osc.start(startTime);
+    osc.stop(startTime + duration + 0.4);
+    allOscillators.push(osc, vibLfo);
+  }
+
+  function playChord(freqs, startTime, duration) {
+    freqs.forEach(f => playNote(f, startTime, duration, 0.04, 'sine'));
+    // Add a soft 2nd harmonic
+    freqs.forEach(f => playNote(f*2, startTime, duration, 0.015, 'sine'));
+  }
+
+  function scheduleMelody() {
+    if (!musicPlaying) return;
+    const now = audioCtx.currentTime;
+    let t = now + 0.05;
+    melody.forEach((freq, i) => {
+      playNote(freq, t, melodyDur[i] * 0.9, 0.13);
+      // Octave below for richness
+      playNote(freq * 0.5, t, melodyDur[i] * 0.9, 0.04);
+      t += melodyDur[i];
+    });
+    const totalDur = melodyDur.reduce((a,b) => a+b, 0);
+    // Schedule chords every 3 beats
+    for (let ci = 0; ci < 4; ci++) {
+      playChord(chords[ci % chords.length], now + 0.05 + ci * 3, 3.0);
+    }
+    const id = setTimeout(scheduleMelody, (totalDur - 0.2) * 1000);
+    allIntervals.push(id);
+  }
+
+  function startMusic() {
+    audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.setValueAtTime(0, audioCtx.currentTime);
+    masterGain.gain.linearRampToValueAtTime(0.7, audioCtx.currentTime + 1.5);
+    masterGain.connect(audioCtx.destination);
+    reverbNode = createReverb(audioCtx);
+    reverbNode.connect(masterGain);
+    musicPlaying = true;
+    scheduleMelody();
+    document.getElementById('music-btn').classList.add('playing');
+    document.getElementById('waves').classList.add('show');
+  }
+
+  function stopMusic() {
+    musicPlaying = false;
+    allIntervals.forEach(clearTimeout);
+    allIntervals = [];
+    if (masterGain) {
+      masterGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.8);
+    }
+    setTimeout(() => {
+      allOscillators.forEach(o => { try { o.stop(); } catch(e){} });
+      allOscillators = [];
+      if (audioCtx) { audioCtx.close(); audioCtx = null; }
+    }, 900);
+    document.getElementById('music-btn').classList.remove('playing');
+    document.getElementById('waves').classList.remove('show');
+  }
+
+  function toggleMusic() {
+    if (!musicPlaying) startMusic(); else stopMusic();
+  }
+
+  // Auto-start music on first user interaction with page
+  let autoStarted = false;
+  document.addEventListener('click', () => {
+    if (!autoStarted) { autoStarted = true; startMusic(); }
+  }, { once: true });
+  document.addEventListener('mousemove', () => {
+    if (!autoStarted) { autoStarted = true; startMusic(); }
+  }, { once: true });
+
   /* ─────── Fireworks ─────── */
   const canvas = document.getElementById('fireworks-canvas');
   const ctx    = canvas.getContext('2d');
